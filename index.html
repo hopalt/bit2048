@@ -1,497 +1,989 @@
 <!DOCTYPE html>
 <html lang="ko">
+
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="description" content="Bit 2048 — bit에서 EB까지. 데이터 단위를 합치는 긱 감성 퍼즐게임">
-<meta property="og:title" content="Bit 2048">
-<meta property="og:description" content="bit에서 EB까지. 데이터 단위를 합치는 긱 감성 퍼즐게임">
-<meta property="og:type" content="website">
-<title>Bit 2048</title>
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Noto+Sans+KR:wght@300;400;500&display=swap');
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Bit 2048 — bit에서 TB까지. 데이터 단위를 합치는 긱 감성 퍼즐게임">
+    <meta property="og:title" content="Bit 2048">
+    <meta property="og:description" content="bit에서 TB까지. 데이터 단위를 합치는 긱 감성 퍼즐게임">
+    <title>Bit 2048</title>
 
-:root {
-  --green: #00ff41;
-  --green-dim: #00b32c;
-  --green-dark: #003d10;
-  --green-bg: #0a0a0a;
-  --green-card: #0d1a0d;
-  --border: #00ff4133;
-  --border-bright: #00ff4166;
-  --amber: #ffb000;
-  --cyan: #00ffcc;
-  --text: #c8ffc8;
-  --text-dim: #7abf7a;
-}
+    <!-- Firebase SDK -->
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+        import { getFirestore, collection, query, orderBy, limit, getDocs, where } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 
-* { box-sizing: border-box; margin: 0; padding: 0; }
-html { scroll-behavior: smooth; }
+        // ⚠ 아래 config를 Firebase 콘솔 → 프로젝트 설정 → 웹앱 추가 에서 복사해서 교체하세요
+        const firebaseConfig = {
+            apiKey: "AIzaSyAFKqOJwladfm7C8ZQwlZtcV6sIC2mUxjo",
+            authDomain: "bit2048.firebaseapp.com",
+            projectId: "bit2048",
+            storageBucket: "bit2048.firebasestorage.app",
+            messagingSenderId: "623636019425",
+            appId: "1:623636019425:web:5deaa69a68e5690a24dfa0",
+            measurementId: "G-MKKQPFWLJV"
+        };
 
-body {
-  background: var(--green-bg);
-  color: var(--text);
-  font-family: 'Noto Sans KR', sans-serif;
-  font-weight: 300;
-  line-height: 1.8;
-  overflow-x: hidden;
-}
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
 
-/* scanline */
-body::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  background: repeating-linear-gradient(
-    to bottom,
-    transparent 0px, transparent 3px,
-    rgba(0,0,0,0.07) 3px, rgba(0,0,0,0.07) 4px
-  );
-  pointer-events: none;
-  z-index: 9999;
-}
+        const PHASE_COLORS = {
+            'BIT': '#00ff41',
+            'BYTE': '#00ffcc',
+            'KB': '#00aaff',
+            'MB': '#aa00ff',
+            'GB': '#ff8800',
+            'TB': '#ff2244',
+        };
 
-/* vignette */
-body::after {
-  content: '';
-  position: fixed;
-  inset: 0;
-  background: radial-gradient(ellipse at center, transparent 60%, rgba(0,0,0,0.55) 100%);
-  pointer-events: none;
-  z-index: 9998;
-}
+        function getFlagEmoji(code) {
+            if (!code || code === 'XX') return '🌐';
+            return [...code.toUpperCase()].map(c =>
+                String.fromCodePoint(c.codePointAt(0) + 127397)
+            ).join('');
+        }
 
-a { color: var(--green); text-decoration: none; }
+        function formatScore(n) {
+            return Number(n).toLocaleString();
+        }
 
-/* ── HERO ── */
-.hero {
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  padding: 60px 24px;
-  position: relative;
-}
+        function phaseColor(phase) {
+            return PHASE_COLORS[phase] || '#00ff41';
+        }
 
-.hero-grid {
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(var(--border) 1px, transparent 1px),
-    linear-gradient(90deg, var(--border) 1px, transparent 1px);
-  background-size: 48px 48px;
-  opacity: 0.35;
-}
+        // ── 국가별 랭킹 로드
+        async function loadCountryRankings() {
+            const el = document.getElementById('country-tbody');
+            try {
+                const q = query(collection(db, 'countries'), orderBy('bestScore', 'desc'), limit(20));
+                const snap = await getDocs(q);
+                if (snap.empty) { el.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#7abf7a;font-family:\'Share Tech Mono\',monospace;padding:20px;">> NO DATA YET</td></tr>'; return; }
+                let html = '';
+                snap.docs.forEach((doc, i) => {
+                    const d = doc.data();
+                    const rank = i + 1;
+                    const rankColor = rank <= 3 ? '#ffb000' : '#7abf7a';
+                    const pc = phaseColor(d.topPhase || 'BIT');
+                    html += `<tr class="tr-hover">
+          <td style="color:${rankColor};font-family:'Share Tech Mono',monospace;">#${rank}</td>
+          <td>${getFlagEmoji(d.countryCode || doc.id)}</td>
+          <td style="font-family:'Share Tech Mono',monospace;color:#c8ffc8;">${d.countryCode || doc.id}</td>
+          <td style="font-family:'Share Tech Mono',monospace;color:#00ff41;">${formatScore(d.bestScore || 0)}</td>
+          <td style="font-family:'Share Tech Mono',monospace;color:#c8ffc8;">${formatScore(d.totalPlayers || 0)}</td>
+          <td><span style="color:${pc};border:1px solid ${pc}44;background:${pc}11;font-family:'Share Tech Mono',monospace;font-size:10px;padding:2px 8px;border-radius:2px;">[ ${d.topPhase || 'BIT'} ]</span></td>
+        </tr>`;
+                });
+                el.innerHTML = html;
+            } catch (e) {
+                el.innerHTML = `<tr><td colspan="6" style="text-align:center;color:#ff4444;font-family:'Share Tech Mono',monospace;padding:20px;">> CONNECTION FAILED</td></tr>`;
+            }
+        }
 
-.hero-content { position: relative; z-index: 1; }
+        // ── 개인 글로벌 TOP 100 로드
+        async function loadGlobalRanking() {
+            const el = document.getElementById('global-tbody');
+            try {
+                const q = query(collection(db, 'users'), orderBy('bestScore', 'desc'), limit(100));
+                const snap = await getDocs(q);
+                if (snap.empty) { el.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#7abf7a;font-family:\'Share Tech Mono\',monospace;padding:20px;">> NO DATA YET. BE THE FIRST!</td></tr>'; return; }
+                let html = '';
+                snap.docs.forEach((doc, i) => {
+                    const d = doc.data();
+                    const rank = i + 1;
+                    const rankColor = rank <= 3 ? '#ffb000' : '#7abf7a';
+                    const pc = phaseColor(d.bestPhase || 'BIT');
+                    html += `<tr class="tr-hover">
+          <td style="color:${rankColor};font-family:'Share Tech Mono',monospace;">#${rank}</td>
+          <td>${getFlagEmoji(d.country)}</td>
+          <td style="font-family:'Share Tech Mono',monospace;color:#c8ffc8;">${d.nickname || '—'}</td>
+          <td style="font-family:'Share Tech Mono',monospace;color:#00ff41;">${formatScore(d.bestScore || 0)}</td>
+          <td><span style="color:${pc};border:1px solid ${pc}44;background:${pc}11;font-family:'Share Tech Mono',monospace;font-size:10px;padding:2px 8px;border-radius:2px;">[ ${d.bestPhase || 'BIT'} ]</span></td>
+        </tr>`;
+                });
+                el.innerHTML = html;
+            } catch (e) {
+                el.innerHTML = `<tr><td colspan="5" style="text-align:center;color:#ff4444;font-family:'Share Tech Mono',monospace;padding:20px;">> CONNECTION FAILED</td></tr>`;
+            }
+        }
 
-.boot-text {
-  font-family: 'Share Tech Mono', monospace;
-  font-size: 11px;
-  color: var(--green-dim);
-  letter-spacing: 3px;
-  margin-bottom: 28px;
-  opacity: 0;
-  animation: fadeUp 0.5s ease forwards 0.1s;
-}
+        // 탭 전환
+        window.switchTab = function (tab) {
+            document.querySelectorAll('.tab-content').forEach(el => el.style.display = 'none');
+            document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+            document.getElementById('tab-' + tab).style.display = 'block';
+            document.getElementById('tabBtn-' + tab).classList.add('active');
+        }
 
-.app-icon {
-  width: 120px; height: 120px;
-  background: #061006;
-  border: 1px solid var(--border-bright);
-  border-radius: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin: 0 auto 28px;
-  font-family: 'Share Tech Mono', monospace;
-  font-size: 10px;
-  color: var(--green-dim);
-  box-shadow: 0 0 32px rgba(0,255,65,0.12);
-  opacity: 0;
-  animation: fadeUp 0.5s ease forwards 0.2s;
-}
+        // 새로고침
+        window.refreshData = function () {
+            document.getElementById('country-tbody').innerHTML = loadingRow(6);
+            document.getElementById('global-tbody').innerHTML = loadingRow(5);
+            loadCountryRankings();
+            loadGlobalRanking();
+            updateTime();
+        }
 
-.app-title {
-  font-family: 'Share Tech Mono', monospace;
-  font-size: clamp(42px, 12vw, 80px);
-  color: var(--green);
-  letter-spacing: 6px;
-  line-height: 1;
-  text-shadow: 0 0 40px rgba(0,255,65,0.35), 0 0 80px rgba(0,255,65,0.1);
-  opacity: 0;
-  animation: fadeUp 0.5s ease forwards 0.3s;
-}
+        function loadingRow(cols) {
+            return `<tr><td colspan="${cols}" style="text-align:center;color:#00b32c;font-family:'Share Tech Mono',monospace;padding:20px;">> FETCHING DATA<span class="blink-cursor">█</span></td></tr>`;
+        }
 
-.app-tagline {
-  font-family: 'Share Tech Mono', monospace;
-  font-size: 13px;
-  color: var(--cyan);
-  letter-spacing: 3px;
-  margin-top: 14px;
-  opacity: 0;
-  animation: fadeUp 0.5s ease forwards 0.45s;
-}
+        function updateTime() {
+            const el = document.getElementById('last-updated');
+            if (el) el.textContent = new Date().toLocaleTimeString('ko-KR');
+        }
 
-.app-desc {
-  max-width: 460px;
-  margin: 24px auto 0;
-  font-size: 14px;
-  color: var(--text-dim);
-  line-height: 1.9;
-  opacity: 0;
-  animation: fadeUp 0.5s ease forwards 0.6s;
-}
+        // 초기 로드
+        window.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('country-tbody').innerHTML = loadingRow(6);
+            document.getElementById('global-tbody').innerHTML = loadingRow(5);
+            loadCountryRankings();
+            loadGlobalRanking();
+            updateTime();
+        });
+    </script>
 
-/* phase chain */
-.phase-chain {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 6px;
-  margin: 28px auto 0;
-  max-width: 500px;
-  align-items: center;
-  opacity: 0;
-  animation: fadeUp 0.5s ease forwards 0.75s;
-}
-.pt {
-  font-family: 'Share Tech Mono', monospace;
-  font-size: 10px;
-  padding: 3px 10px;
-  border-radius: 2px;
-  border: 1px solid;
-}
-.pt-arr { font-family: 'Share Tech Mono', monospace; font-size: 10px; color: var(--text-dim); }
-.pt-bit  { color:#00ff41; border-color:#00ff4166; background:#061006; }
-.pt-byte { color:#00ffcc; border-color:#00ffcc66; background:#001a14; }
-.pt-kb   { color:#00aaff; border-color:#00aaff66; background:#00001a; }
-.pt-mb   { color:#aa00ff; border-color:#aa00ff66; background:#0d0014; }
-.pt-gb   { color:#ff8800; border-color:#ff880066; background:#1a0800; }
-.pt-tb   { color:#ff2244; border-color:#ff224466; background:#1a0008; }
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Noto+Sans+KR:wght@300;400;500&display=swap');
 
-/* download buttons */
-.dl-buttons {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 12px;
-  margin-top: 36px;
-  opacity: 0;
-  animation: fadeUp 0.5s ease forwards 0.9s;
-}
+        :root {
+            --green: #00ff41;
+            --green-dim: #00b32c;
+            --green-dark: #003d10;
+            --green-bg: #0a0a0a;
+            --green-card: #0d1a0d;
+            --border: #00ff4133;
+            --border-bright: #00ff4166;
+            --amber: #ffb000;
+            --cyan: #00ffcc;
+            --text: #c8ffc8;
+            --text-dim: #7abf7a;
+        }
 
-.btn {
-  font-family: 'Share Tech Mono', monospace;
-  font-size: 12px;
-  letter-spacing: 2px;
-  padding: 13px 28px;
-  border-radius: 2px;
-  border: 1px solid;
-  cursor: pointer;
-  transition: all 0.15s;
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-}
-.btn-android {
-  background: var(--green-dark);
-  border-color: var(--green);
-  color: var(--green);
-}
-.btn-android:hover {
-  background: #005020;
-  color: #80ffb0;
-  box-shadow: 0 0 20px rgba(0,255,65,0.2);
-}
-.btn-ios {
-  background: transparent;
-  border-color: var(--border-bright);
-  color: var(--text-dim);
-  cursor: default;
-  opacity: 0.6;
-}
-.btn-icon { font-size: 16px; }
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
 
-/* features */
-.features {
-  padding: 72px 24px;
-  background: #080d08;
-}
-.features-inner {
-  max-width: 820px;
-  margin: 0 auto;
-}
-.sec-label {
-  font-family: 'Share Tech Mono', monospace;
-  font-size: 11px;
-  color: var(--green-dim);
-  letter-spacing: 4px;
-  margin-bottom: 6px;
-  text-align: center;
-}
-.sec-title {
-  font-family: 'Share Tech Mono', monospace;
-  font-size: 20px;
-  color: var(--green);
-  letter-spacing: 3px;
-  text-align: center;
-  margin-bottom: 40px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--border);
-}
+        html {
+            scroll-behavior: smooth;
+        }
 
-.feat-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 14px;
-}
-.feat-card {
-  background: var(--green-card);
-  border: 1px solid var(--border);
-  padding: 22px;
-  border-radius: 2px;
-  transition: border-color 0.2s;
-}
-.feat-card:hover { border-color: var(--green-dim); }
-.feat-icon {
-  font-size: 20px;
-  margin-bottom: 10px;
-}
-.feat-title {
-  font-family: 'Share Tech Mono', monospace;
-  font-size: 11px;
-  color: var(--green);
-  letter-spacing: 2px;
-  margin-bottom: 8px;
-}
-.feat-desc {
-  font-size: 12.5px;
-  color: var(--text-dim);
-  line-height: 1.75;
-}
+        body {
+            background: var(--green-bg);
+            color: var(--text);
+            font-family: 'Noto Sans KR', sans-serif;
+            font-weight: 300;
+            line-height: 1.8;
+            overflow-x: hidden;
+        }
 
-/* phase showcase */
-.phases {
-  padding: 72px 24px;
-  background: var(--green-bg);
-}
-.phases-inner { max-width: 820px; margin: 0 auto; }
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background: repeating-linear-gradient(to bottom, transparent 0px, transparent 3px, rgba(0, 0, 0, 0.07) 3px, rgba(0, 0, 0, 0.07) 4px);
+            pointer-events: none;
+            z-index: 9999;
+        }
 
-.phase-cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-  gap: 10px;
-}
-.phase-card {
-  border: 1px solid;
-  padding: 18px 12px;
-  border-radius: 2px;
-  text-align: center;
-}
-.phase-card-name {
-  font-family: 'Share Tech Mono', monospace;
-  font-size: 14px;
-  font-weight: bold;
-  letter-spacing: 2px;
-  margin-bottom: 6px;
-}
-.phase-card-desc {
-  font-family: 'Share Tech Mono', monospace;
-  font-size: 9px;
-  opacity: 0.7;
-  line-height: 1.6;
-}
-.pc-bit  { color:#00ff41; border-color:#00ff4144; background:#061006; }
-.pc-byte { color:#00ffcc; border-color:#00ffcc44; background:#001a14; }
-.pc-kb   { color:#00aaff; border-color:#00aaff44; background:#00001a; }
-.pc-mb   { color:#aa00ff; border-color:#aa00ff44; background:#0d0014; }
-.pc-gb   { color:#ff8800; border-color:#ff880044; background:#1a0800; }
-.pc-tb   { color:#ff2244; border-color:#ff224444; background:#1a0008; }
+        body::after {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background: radial-gradient(ellipse at center, transparent 60%, rgba(0, 0, 0, 0.55) 100%);
+            pointer-events: none;
+            z-index: 9998;
+        }
 
-/* footer */
-footer {
-  background: var(--green-card);
-  border-top: 1px solid var(--border);
-  padding: 28px 24px;
-  text-align: center;
-}
-.footer-links {
-  display: flex;
-  justify-content: center;
-  gap: 20px;
-  flex-wrap: wrap;
-  margin-bottom: 14px;
-}
-.footer-links a {
-  font-family: 'Share Tech Mono', monospace;
-  font-size: 10px;
-  color: var(--text-dim);
-  letter-spacing: 1px;
-  transition: color 0.15s;
-}
-.footer-links a:hover { color: var(--green); }
-.footer-copy {
-  font-family: 'Share Tech Mono', monospace;
-  font-size: 10px;
-  color: #3a5a3a;
-  letter-spacing: 1px;
-}
+        a {
+            color: var(--green);
+            text-decoration: none;
+        }
 
-.cursor {
-  display: inline-block;
-  width: 8px; height: 13px;
-  background: var(--green);
-  vertical-align: middle;
-  margin-left: 2px;
-  animation: blink 1s step-end infinite;
-}
+        /* NAV */
+        nav {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 100;
+            background: rgba(10, 10, 10, 0.92);
+            border-bottom: 1px solid var(--border);
+            backdrop-filter: blur(8px);
+            padding: 0 32px;
+            height: 52px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
 
-@keyframes fadeUp {
-  from { opacity:0; transform:translateY(16px); }
-  to   { opacity:1; transform:translateY(0); }
-}
-@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+        .nav-logo {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 14px;
+            color: var(--green);
+            letter-spacing: 3px;
+            text-shadow: 0 0 12px rgba(0, 255, 65, 0.5);
+        }
 
-@media(max-width:480px){
-  .btn { padding: 11px 18px; font-size: 11px; }
-  .phase-cards { grid-template-columns: repeat(3,1fr); }
-}
-</style>
+        .nav-links {
+            display: flex;
+            gap: 20px;
+            list-style: none;
+        }
+
+        .nav-links a {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 11px;
+            color: var(--text-dim);
+            letter-spacing: 2px;
+            transition: color 0.2s;
+        }
+
+        .nav-links a:hover {
+            color: var(--green);
+        }
+
+        /* HERO */
+        .hero {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding: 60px 24px;
+            position: relative;
+        }
+
+        .hero-grid {
+            position: absolute;
+            inset: 0;
+            background-image: linear-gradient(var(--border) 1px, transparent 1px), linear-gradient(90deg, var(--border) 1px, transparent 1px);
+            background-size: 48px 48px;
+            opacity: 0.35;
+        }
+
+        .hero-content {
+            position: relative;
+            z-index: 1;
+        }
+
+        .boot-text {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 11px;
+            color: var(--green-dim);
+            letter-spacing: 3px;
+            margin-bottom: 28px;
+            opacity: 0;
+            animation: fadeUp 0.5s ease forwards 0.1s;
+        }
+
+        .app-icon {
+            width: 120px;
+            height: 120px;
+            border-radius: 24px;
+            margin: 0 auto 28px;
+            display: block;
+            box-shadow: 0 0 32px rgba(0, 255, 65, 0.2);
+            opacity: 0;
+            animation: fadeUp 0.5s ease forwards 0.2s;
+        }
+
+        .app-title {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: clamp(42px, 12vw, 80px);
+            color: var(--green);
+            letter-spacing: 6px;
+            line-height: 1;
+            text-shadow: 0 0 40px rgba(0, 255, 65, 0.35);
+            opacity: 0;
+            animation: fadeUp 0.5s ease forwards 0.3s;
+        }
+
+        .app-tagline {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 13px;
+            color: var(--cyan);
+            letter-spacing: 3px;
+            margin-top: 14px;
+            opacity: 0;
+            animation: fadeUp 0.5s ease forwards 0.45s;
+        }
+
+        .app-desc {
+            max-width: 460px;
+            margin: 24px auto 0;
+            font-size: 14px;
+            color: var(--text-dim);
+            line-height: 1.9;
+            opacity: 0;
+            animation: fadeUp 0.5s ease forwards 0.6s;
+        }
+
+        .phase-chain {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 6px;
+            margin: 28px auto 0;
+            max-width: 500px;
+            align-items: center;
+            opacity: 0;
+            animation: fadeUp 0.5s ease forwards 0.75s;
+        }
+
+        .pt {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 10px;
+            padding: 3px 10px;
+            border-radius: 2px;
+            border: 1px solid;
+        }
+
+        .pt-arr {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 10px;
+            color: var(--text-dim);
+        }
+
+        .pt-bit {
+            color: #00ff41;
+            border-color: #00ff4166;
+            background: #061006;
+        }
+
+        .pt-byte {
+            color: #00ffcc;
+            border-color: #00ffcc66;
+            background: #001a14;
+        }
+
+        .pt-kb {
+            color: #00aaff;
+            border-color: #00aaff66;
+            background: #00001a;
+        }
+
+        .pt-mb {
+            color: #aa00ff;
+            border-color: #aa00ff66;
+            background: #0d0014;
+        }
+
+        .pt-gb {
+            color: #ff8800;
+            border-color: #ff880066;
+            background: #1a0800;
+        }
+
+        .pt-tb {
+            color: #ff2244;
+            border-color: #ff224466;
+            background: #1a0008;
+        }
+
+        .dl-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 12px;
+            margin-top: 36px;
+            opacity: 0;
+            animation: fadeUp 0.5s ease forwards 0.9s;
+        }
+
+        .btn {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 12px;
+            letter-spacing: 2px;
+            padding: 13px 28px;
+            border-radius: 2px;
+            border: 1px solid;
+            cursor: pointer;
+            transition: all 0.15s;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .btn-android {
+            background: var(--green-dark);
+            border-color: var(--green);
+            color: var(--green);
+        }
+
+        .btn-android:hover {
+            background: #005020;
+            color: #80ffb0;
+            box-shadow: 0 0 20px rgba(0, 255, 65, 0.2);
+        }
+
+        .btn-ios {
+            background: transparent;
+            border-color: var(--border-bright);
+            color: var(--text-dim);
+            cursor: default;
+            opacity: 0.6;
+        }
+
+        /* SECTIONS */
+        section {
+            padding: 72px 24px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .sec-label {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 11px;
+            color: var(--green-dim);
+            letter-spacing: 4px;
+            margin-bottom: 6px;
+            text-align: center;
+        }
+
+        .sec-title {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 20px;
+            color: var(--green);
+            letter-spacing: 3px;
+            text-align: center;
+            margin-bottom: 32px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        /* LEADERBOARD */
+        #leaderboard {
+            background: #080d08;
+        }
+
+        .lb-meta {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .lb-updated {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 10px;
+            color: var(--text-dim);
+        }
+
+        .refresh-btn {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 10px;
+            color: var(--green-dim);
+            background: transparent;
+            border: 1px solid var(--border);
+            padding: 4px 12px;
+            cursor: pointer;
+            border-radius: 2px;
+            transition: all 0.15s;
+            letter-spacing: 1px;
+        }
+
+        .refresh-btn:hover {
+            border-color: var(--green-dim);
+            color: var(--green);
+        }
+
+        /* TABS */
+        .tabs {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 20px;
+        }
+
+        .tab-btn {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 11px;
+            letter-spacing: 2px;
+            padding: 8px 20px;
+            border: 1px solid var(--border);
+            background: transparent;
+            color: var(--text-dim);
+            cursor: pointer;
+            border-radius: 2px;
+            transition: all 0.15s;
+        }
+
+        .tab-btn.active {
+            background: var(--green-dark);
+            border-color: var(--green);
+            color: var(--green);
+        }
+
+        .tab-btn:hover {
+            border-color: var(--green-dim);
+            color: var(--green);
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active-tab {
+            display: block;
+        }
+
+        /* TABLE */
+        .table-wrap {
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+
+        th {
+            background: #061006;
+            color: var(--green);
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 10px;
+            letter-spacing: 1px;
+            padding: 10px 14px;
+            text-align: left;
+            border: 1px solid var(--border);
+            white-space: nowrap;
+        }
+
+        td {
+            padding: 9px 14px;
+            border: 1px solid var(--border);
+            vertical-align: middle;
+        }
+
+        tr:nth-child(even) td {
+            background: #080d08;
+        }
+
+        .tr-hover:hover td {
+            background: #0d1a0d !important;
+        }
+
+        /* FEATURES */
+        #features {
+            background: var(--green-bg);
+        }
+
+        .feat-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 14px;
+        }
+
+        .feat-card {
+            background: var(--green-card);
+            border: 1px solid var(--border);
+            padding: 22px;
+            border-radius: 2px;
+            transition: border-color 0.2s;
+        }
+
+        .feat-card:hover {
+            border-color: var(--green-dim);
+        }
+
+        .feat-icon {
+            font-size: 20px;
+            margin-bottom: 10px;
+        }
+
+        .feat-title {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 11px;
+            color: var(--green);
+            letter-spacing: 2px;
+            margin-bottom: 8px;
+        }
+
+        .feat-desc {
+            font-size: 12.5px;
+            color: var(--text-dim);
+            line-height: 1.75;
+        }
+
+        /* PHASE SHOWCASE */
+        #phases {
+            background: #080d08;
+        }
+
+        .phase-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 10px;
+        }
+
+        .phase-card {
+            border: 1px solid;
+            padding: 18px 12px;
+            border-radius: 2px;
+            text-align: center;
+        }
+
+        .phase-card-name {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 14px;
+            font-weight: bold;
+            letter-spacing: 2px;
+            margin-bottom: 6px;
+        }
+
+        .phase-card-desc {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 9px;
+            opacity: 0.7;
+            line-height: 1.6;
+        }
+
+        .pc-bit {
+            color: #00ff41;
+            border-color: #00ff4144;
+            background: #061006;
+        }
+
+        .pc-byte {
+            color: #00ffcc;
+            border-color: #00ffcc44;
+            background: #001a14;
+        }
+
+        .pc-kb {
+            color: #00aaff;
+            border-color: #00aaff44;
+            background: #00001a;
+        }
+
+        .pc-mb {
+            color: #aa00ff;
+            border-color: #aa00ff44;
+            background: #0d0014;
+        }
+
+        .pc-gb {
+            color: #ff8800;
+            border-color: #ff880044;
+            background: #1a0800;
+        }
+
+        .pc-tb {
+            color: #ff2244;
+            border-color: #ff224444;
+            background: #1a0008;
+        }
+
+        /* FOOTER */
+        footer {
+            background: var(--green-card);
+            border-top: 1px solid var(--border);
+            padding: 28px 24px;
+            text-align: center;
+        }
+
+        .footer-links {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            flex-wrap: wrap;
+            margin-bottom: 14px;
+        }
+
+        .footer-links a {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 10px;
+            color: var(--text-dim);
+            letter-spacing: 1px;
+            transition: color 0.15s;
+        }
+
+        .footer-links a:hover {
+            color: var(--green);
+        }
+
+        .footer-copy {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 10px;
+            color: #3a5a3a;
+            letter-spacing: 1px;
+        }
+
+        .cursor {
+            display: inline-block;
+            width: 8px;
+            height: 13px;
+            background: var(--green);
+            vertical-align: middle;
+            margin-left: 2px;
+            animation: blink 1s step-end infinite;
+        }
+
+        .blink-cursor {
+            display: inline-block;
+            width: 8px;
+            height: 12px;
+            background: var(--green-dim);
+            vertical-align: middle;
+            margin-left: 4px;
+            animation: blink 1s step-end infinite;
+        }
+
+        @keyframes fadeUp {
+            from {
+                opacity: 0;
+                transform: translateY(16px)
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0)
+            }
+        }
+
+        @keyframes blink {
+
+            0%,
+            100% {
+                opacity: 1
+            }
+
+            50% {
+                opacity: 0
+            }
+        }
+
+        @media(max-width:600px) {
+            nav {
+                padding: 0 16px;
+            }
+
+            .nav-links {
+                gap: 12px;
+            }
+
+            .nav-links a {
+                font-size: 10px;
+                letter-spacing: 1px;
+            }
+
+            .phase-cards {
+                grid-template-columns: repeat(3, 1fr);
+            }
+        }
+    </style>
 </head>
+
 <body>
 
-<!-- HERO -->
-<section class="hero">
-  <div class="hero-grid"></div>
-  <div class="hero-content">
+    <!-- NAV -->
+    <nav>
+        <div class="nav-logo">BIT 2048</div>
+        <ul class="nav-links">
+            <li><a href="#leaderboard">RANKING</a></li>
+            <li><a href="#features">FEATURES</a></li>
+            <li><a href="#phases">PHASES</a></li>
+            <li><a href="privacy_policy_bit2048.html">PRIVACY</a></li>
+        </ul>
+    </nav>
 
-    <div class="boot-text">> SYSTEM BOOT — com.hopalt.t2048</div>
+    <!-- HERO -->
+    <section class="hero">
+        <div class="hero-grid"></div>
+        <div class="hero-content">
+            <div class="boot-text">> SYSTEM BOOT — com.hopalt.t2048</div>
+            <img class="app-icon"
+                src="data:image/png;base64,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"
+                alt="Bit 2048 Icon">
+            <div class="app-title">BIT 2048</div>
+            <div class="app-tagline">> Merge bits. Upgrade your server._</div>
+            <p class="app-desc">
+                1bit에서 시작해 1TB까지.<br>
+                데이터 단위를 합쳐 서버 용량을 키워가는<br>
+                개발자 감성 100% 퍼즐 게임.
+            </p>
+            <div class="phase-chain">
+                <span class="pt pt-bit">1 bit</span><span class="pt-arr">→</span>
+                <span class="pt pt-byte">1 Byte</span><span class="pt-arr">→</span>
+                <span class="pt pt-kb">1 KB</span><span class="pt-arr">→</span>
+                <span class="pt pt-mb">1 MB</span><span class="pt-arr">→</span>
+                <span class="pt pt-gb">1 GB</span><span class="pt-arr">→</span>
+                <span class="pt pt-tb">1 TB 🏆</span>
+            </div>
+            <div class="dl-buttons">
+                <a href="https://play.google.com/store/apps/details?id=com.hopalt.t2048" class="btn btn-android"
+                    target="_blank">
+                    <span>▶</span> Google Play
+                </a>
+                <span class="btn btn-ios"><span>◆</span> App Store — Coming Soon</span>
+            </div>
+        </div>
+    </section>
 
-    <img src="data:image/png;base64,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" style="width:120px;height:120px;border-radius:24px;object-fit:cover;box-shadow:0 0 32px rgba(0,255,65,0.2);">
+    <!-- LEADERBOARD -->
+    <section id="leaderboard">
+        <div class="container">
+            <div class="sec-label">> GLOBAL RANKINGS</div>
+            <div class="sec-title">// 글로벌 리더보드</div>
 
-    <div class="app-title">BIT 2048</div>
-    <div class="app-tagline">> Merge bits. Upgrade your server._</div>
+            <div class="lb-meta">
+                <div class="tabs">
+                    <button class="tab-btn active" id="tabBtn-countries" onclick="switchTab('countries')">🌍
+                        COUNTRIES</button>
+                    <button class="tab-btn" id="tabBtn-global" onclick="switchTab('global')">👤 GLOBAL TOP 100</button>
+                </div>
+                <div style="display:flex;align-items:center;gap:12px;">
+                    <span class="lb-updated">Updated: <span id="last-updated">—</span></span>
+                    <button class="refresh-btn" onclick="refreshData()">[ ↺ REFRESH ]</button>
+                </div>
+            </div>
 
-    <p class="app-desc">
-      1bit에서 시작해 1TB까지.<br>
-      데이터 단위를 합쳐 서버 용량을 키워가는<br>
-      개발자 감성 100% 퍼즐 게임.
-    </p>
+            <!-- 국가별 -->
+            <div class="tab-content" id="tab-countries" style="display:block;">
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>RANK</th>
+                                <th>FLAG</th>
+                                <th>CODE</th>
+                                <th>BEST SCORE</th>
+                                <th>PLAYERS</th>
+                                <th>TOP PHASE</th>
+                            </tr>
+                        </thead>
+                        <tbody id="country-tbody">
+                            <tr>
+                                <td colspan="6"
+                                    style="text-align:center;color:#00b32c;font-family:'Share Tech Mono',monospace;padding:20px;">
+                                    > FETCHING DATA<span class="blink-cursor"></span></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
 
-    <div class="phase-chain">
-      <span class="pt pt-bit">1 bit</span>
-      <span class="pt-arr">→</span>
-      <span class="pt pt-byte">1 Byte</span>
-      <span class="pt-arr">→</span>
-      <span class="pt pt-kb">1 KB</span>
-      <span class="pt-arr">→</span>
-      <span class="pt pt-mb">1 MB</span>
-      <span class="pt-arr">→</span>
-      <span class="pt pt-gb">1 GB</span>
-      <span class="pt-arr">→</span>
-      <span class="pt pt-tb">1 TB 🏆</span>
-    </div>
+            <!-- 개인 글로벌 -->
+            <div class="tab-content" id="tab-global">
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>RANK</th>
+                                <th>FLAG</th>
+                                <th>CALLSIGN</th>
+                                <th>BEST SCORE</th>
+                                <th>PHASE</th>
+                            </tr>
+                        </thead>
+                        <tbody id="global-tbody">
+                            <tr>
+                                <td colspan="5"
+                                    style="text-align:center;color:#00b32c;font-family:'Share Tech Mono',monospace;padding:20px;">
+                                    > FETCHING DATA<span class="blink-cursor"></span></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
 
-    <div class="dl-buttons">
-      <a href="https://play.google.com/store/apps/details?id=com.hopalt.t2048"
-         class="btn btn-android" target="_blank">
-        <span class="btn-icon">▶</span> Google Play
-      </a>
-      <span class="btn btn-ios">
-        <span class="btn-icon">◆</span> App Store — Coming Soon
-      </span>
-    </div>
+        </div>
+    </section>
 
-  </div>
-</section>
+    <!-- FEATURES -->
+    <section id="features">
+        <div class="container">
+            <div class="sec-label">> FEATURES</div>
+            <div class="sec-title">// 게임 특징</div>
+            <div class="feat-grid">
+                <div class="feat-card">
+                    <div class="feat-icon">🖥</div>
+                    <div class="feat-title">TERMINAL UI</div>
+                    <div class="feat-desc">완전한 터미널 감성. 텍스트와 테두리만으로 구성된 미니멀 UI.</div>
+                </div>
+                <div class="feat-card">
+                    <div class="feat-icon">⚡</div>
+                    <div class="feat-title">PHASE SYSTEM</div>
+                    <div class="feat-desc">페이즈마다 색상 테마·배경 패턴 전체 진화. 6단계 다른 분위기.</div>
+                </div>
+                <div class="feat-card">
+                    <div class="feat-icon">🌍</div>
+                    <div class="feat-title">GLOBAL RANKING</div>
+                    <div class="feat-desc">전 세계 플레이어와 국가별 순위 경쟁. 실시간 리더보드.</div>
+                </div>
+                <div class="feat-card">
+                    <div class="feat-icon">📊</div>
+                    <div class="feat-title">STATISTICS</div>
+                    <div class="feat-desc">최고 점수, 총 플레이 횟수, 평균 게임 시간 등 상세 통계.</div>
+                </div>
+                <div class="feat-card">
+                    <div class="feat-icon">💾</div>
+                    <div class="feat-title">AUTO SAVE</div>
+                    <div class="feat-desc">앱 종료해도 현재 페이즈와 점수 자동 저장.</div>
+                </div>
+                <div class="feat-card">
+                    <div class="feat-icon">📱</div>
+                    <div class="feat-title">PLATFORM</div>
+                    <div class="feat-desc">Android 출시 완료. iOS App Store 출시 준비 중.</div>
+                </div>
+            </div>
+        </div>
+    </section>
 
-<!-- FEATURES -->
-<section class="features">
-  <div class="features-inner">
-    <div class="sec-label">> FEATURES</div>
-    <div class="sec-title">// 게임 특징</div>
-    <div class="feat-grid">
-      <div class="feat-card">
-        <div class="feat-icon">🖥</div>
-        <div class="feat-title">TERMINAL UI</div>
-        <div class="feat-desc">완전한 터미널 / 콘솔 감성. 화려한 그래픽 없이 순수 텍스트와 테두리만으로 구성.</div>
-      </div>
-      <div class="feat-card">
-        <div class="feat-icon">⚡</div>
-        <div class="feat-title">PHASE SYSTEM</div>
-        <div class="feat-desc">페이즈가 바뀔 때마다 색상 테마·배경 패턴·UI 전체가 진화. 6단계의 다른 분위기.</div>
-      </div>
-      <div class="feat-card">
-        <div class="feat-icon">📊</div>
-        <div class="feat-title">STATISTICS</div>
-        <div class="feat-desc">최고 점수, 총 플레이 횟수, 평균 게임 시간 등 상세 통계 자동 기록.</div>
-      </div>
-      <div class="feat-card">
-        <div class="feat-icon">💾</div>
-        <div class="feat-title">AUTO SAVE</div>
-        <div class="feat-desc">앱을 종료해도 현재 페이즈와 최고 점수가 자동 저장.</div>
-      </div>
-      <div class="feat-card">
-        <div class="feat-icon">⌨</div>
-        <div class="feat-title">KEYBOARD</div>
-        <div class="feat-desc">스와이프는 물론 WASD / 방향키로도 플레이 가능.</div>
-      </div>
-      <div class="feat-card">
-        <div class="feat-icon">📱</div>
-        <div class="feat-title">PLATFORM</div>
-        <div class="feat-desc">Android 출시 완료. iOS App Store 출시 준비 중.</div>
-      </div>
-    </div>
-  </div>
-</section>
+    <!-- PHASE SHOWCASE -->
+    <section id="phases">
+        <div class="container">
+            <div class="sec-label">> PHASE PROGRESSION</div>
+            <div class="sec-title">// 페이즈별 색상 테마</div>
+            <div class="phase-cards">
+                <div class="phase-card pc-bit">
+                    <div class="phase-card-name">BIT</div>
+                    <div class="phase-card-desc">Terminal<br>Green</div>
+                </div>
+                <div class="phase-card pc-byte">
+                    <div class="phase-card-name">BYTE</div>
+                    <div class="phase-card-desc">Cyan<br>Blue</div>
+                </div>
+                <div class="phase-card pc-kb">
+                    <div class="phase-card-name">KB</div>
+                    <div class="phase-card-desc">Electric<br>Blue</div>
+                </div>
+                <div class="phase-card pc-mb">
+                    <div class="phase-card-name">MB</div>
+                    <div class="phase-card-desc">Deep<br>Purple</div>
+                </div>
+                <div class="phase-card pc-gb">
+                    <div class="phase-card-name">GB</div>
+                    <div class="phase-card-desc">Amber<br>Orange</div>
+                </div>
+                <div class="phase-card pc-tb">
+                    <div class="phase-card-name">TB 🏆</div>
+                    <div class="phase-card-desc">Danger<br>Red</div>
+                </div>
+            </div>
+        </div>
+    </section>
 
-<!-- PHASE SHOWCASE -->
-<section class="phases">
-  <div class="phases-inner">
-    <div class="sec-label">> PHASE PROGRESSION</div>
-    <div class="sec-title">// 페이즈별 색상 테마</div>
-    <div class="phase-cards">
-      <div class="phase-card pc-bit">
-        <div class="phase-card-name">BIT</div>
-        <div class="phase-card-desc">Terminal<br>Green</div>
-      </div>
-      <div class="phase-card pc-byte">
-        <div class="phase-card-name">BYTE</div>
-        <div class="phase-card-desc">Cyan<br>Blue</div>
-      </div>
-      <div class="phase-card pc-kb">
-        <div class="phase-card-name">KB</div>
-        <div class="phase-card-desc">Electric<br>Blue</div>
-      </div>
-      <div class="phase-card pc-mb">
-        <div class="phase-card-name">MB</div>
-        <div class="phase-card-desc">Deep<br>Purple</div>
-      </div>
-      <div class="phase-card pc-gb">
-        <div class="phase-card-name">GB</div>
-        <div class="phase-card-desc">Amber<br>Orange</div>
-      </div>
-      <div class="phase-card pc-tb">
-        <div class="phase-card-name">TB 🏆</div>
-        <div class="phase-card-desc">Danger<br>Red</div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- FOOTER -->
-<footer>
-  <div class="footer-links">
-    <a href="https://play.google.com/store/apps/details?id=com.hopalt.t2048" target="_blank">Google Play</a>
-    <a href="privacy_policy_bit2048.html">개인정보처리방침</a>
-    <a href="privacy_policy_bit2048.html">Privacy Policy</a>
-    <a href="app-ads.txt">app-ads.txt</a>
-  </div>
-  <div class="footer-copy">© 2025 hopalt · Bit 2048 · com.hopalt.t2048<span class="cursor"></span></div>
-</footer>
+    <!-- FOOTER -->
+    <footer>
+        <div class="footer-links">
+            <a href="https://play.google.com/store/apps/details?id=com.hopalt.t2048" target="_blank">Google Play</a>
+            <a href="privacy_policy_bit2048.html">개인정보처리방침</a>
+            <a href="privacy_policy_bit2048.html">Privacy Policy</a>
+            <a href="app-ads.txt">app-ads.txt</a>
+        </div>
+        <div class="footer-copy">© 2025 hopalt · Bit 2048 · com.hopalt.t2048<span class="cursor"></span></div>
+    </footer>
 
 </body>
+
 </html>
